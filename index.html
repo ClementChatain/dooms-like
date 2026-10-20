@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0504" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>HELLBOUND — FPS démoniaque</title>
+  <meta name="description" content="Un FPS rétro façon DOOM avec des graphismes modernes. Jouable sur PC et mobile, directement dans le navigateur." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>" />
+  <style>
+    :root { --accent: #ff4a1c; --cyan: #3dffb0; --bg: #0a0504; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+    html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; touch-action: none; overscroll-behavior: none;
+      font-family: "Bahnschrift", "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #fff; }
+    canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+    .hud { position: fixed; inset: 0; pointer-events: none; display: none; }
+    body.playing .hud { display: block; }
+    #crosshair { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; transform: translate(-50%,-50%); opacity: .85; }
+    #crosshair i { position: absolute; background: #fff; box-shadow: 0 0 6px #000; }
+    #crosshair i:nth-child(1), #crosshair i:nth-child(2) { width: 2px; height: 7px; left: 10px; }
+    #crosshair i:nth-child(1) { top: 0; } #crosshair i:nth-child(2) { bottom: 0; }
+    #crosshair i:nth-child(3), #crosshair i:nth-child(4) { height: 2px; width: 7px; top: 10px; }
+    #crosshair i:nth-child(3) { left: 0; } #crosshair i:nth-child(4) { right: 0; }
+    #crosshair.hit i { background: #ff3030; transform: scale(1.5); }
+    .panel { position: absolute; padding: 10px 16px; background: linear-gradient(180deg, rgba(0,0,0,.55), rgba(0,0,0,.3));
+      border: 1px solid rgba(255,255,255,.12); border-radius: 10px; backdrop-filter: blur(4px); text-transform: uppercase; letter-spacing: .08em; }
+    .label { font-size: 10px; opacity: .6; letter-spacing: .2em; }
+    .big { font-size: 34px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+    #hp { left: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); width: 190px; }
+    #hp .bar { height: 8px; background: rgba(255,255,255,.12); border-radius: 4px; margin-top: 6px; overflow: hidden; }
+    #hp .bar b { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #ff2d2d, #ff9a3c); transition: width .15s; }
+    #ammo { right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); text-align: right; min-width: 150px; }
+    body.is-touch #hp { bottom: auto; top: 12px; left: calc(12px + env(safe-area-inset-left)); width: 150px; padding: 6px 12px; }
+    body.is-touch #hp .big { font-size: 22px; }
+    body.is-touch #ammo { bottom: auto; top: 12px; right: calc(12px + env(safe-area-inset-right)); min-width: 110px; padding: 6px 12px; }
+    body.is-touch #ammo .big { font-size: 22px; }
+    #info { top: 12px; left: 50%; transform: translateX(-50%); text-align: center; font-size: 12px; }
+    body.is-touch #info { top: 8px; padding: 4px 10px; font-size: 10px; }
+    #info b { color: var(--accent); }
+    #minimap { position: absolute; right: 12px; top: 64px; width: 128px; height: 128px; border-radius: 10px; border: 1px solid rgba(255,255,255,.15); background: rgba(0,0,0,.45); }
+    body.is-touch #minimap { width: 92px; height: 92px; top: 60px; right: calc(12px + env(safe-area-inset-right)); }
+    #banner { position: absolute; left: 0; right: 0; top: 22%; text-align: center; font-size: 38px; font-weight: 900; letter-spacing: .25em;
+      text-transform: uppercase; text-shadow: 0 0 24px var(--accent), 0 2px 0 #000; opacity: 0; transition: opacity .4s; padding: 0 20px; }
+    #banner.show { opacity: 1; } #banner small { display: block; font-size: 14px; letter-spacing: .3em; opacity: .75; margin-top: 8px; }
+    #dmg { position: fixed; inset: 0; pointer-events: none; }
+    #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity .6s; }
+    #fade.on { opacity: 1; }
+
+    .screen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+      background: radial-gradient(ellipse at center, rgba(40,8,4,.55) 0%, rgba(8,2,1,.92) 75%); padding: 20px; z-index: 10; }
+    .screen.show { display: flex; }
+    h1 { margin: 0; font-size: clamp(44px, 12vw, 120px); font-weight: 900; letter-spacing: .12em; line-height: .95;
+      background: linear-gradient(180deg, #fff2c0 0%, #ff8a2a 45%, #b01808 100%); -webkit-background-clip: text; background-clip: text; color: transparent;
+      filter: drop-shadow(0 0 30px rgba(255,70,20,.5)); }
+    .tag { margin: 14px 0 28px; letter-spacing: .5em; font-size: 12px; opacity: .7; text-transform: uppercase; }
+    button.cta { pointer-events: auto; cursor: pointer; font: inherit; font-weight: 800; letter-spacing: .3em; text-transform: uppercase; font-size: 16px; color: #fff;
+      padding: 16px 44px; border-radius: 4px; border: 1px solid #ff6a3c; background: linear-gradient(180deg, #d02a0c, #7e1204);
+      box-shadow: 0 0 30px rgba(255,60,20,.45), inset 0 1px 0 rgba(255,255,255,.3); transition: transform .1s, box-shadow .2s; }
+    button.cta:hover { transform: scale(1.04); box-shadow: 0 0 50px rgba(255,80,30,.7), inset 0 1px 0 rgba(255,255,255,.3); }
+    .keys { margin-top: 34px; display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px 22px; max-width: 640px; font-size: 12px; opacity: .8; }
+    .keys span { border: 1px solid rgba(255,255,255,.25); border-bottom-width: 3px; padding: 2px 7px; border-radius: 4px; margin-right: 6px; font-weight: 700; }
+    body.is-touch .keys.desktop { display: none; } body:not(.is-touch) .keys.mobile { display: none; }
+    .stat { margin: 6px 0; font-size: 14px; letter-spacing: .2em; text-transform: uppercase; opacity: .85; }
+    .stat b { color: var(--accent); font-size: 20px; }
+    #best { margin-top: 16px; font-size: 11px; letter-spacing: .3em; opacity: .5; text-transform: uppercase; }
+    #load { font-size: 12px; letter-spacing: .3em; opacity: .6; }
+
+    /* touch controls */
+    #touch { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+    #touch[hidden] { display: none; }
+    #joy-zone { position: absolute; left: 0; bottom: 0; width: 45%; height: 70%; pointer-events: auto; }
+    #look-zone { position: absolute; right: 0; top: 0; width: 55%; height: 100%; pointer-events: auto; }
+    #joy-base { position: fixed; width: 112px; height: 112px; border-radius: 50%; border: 2px solid rgba(255,255,255,.25); background: rgba(255,255,255,.05);
+      transform: translate(-50%,-50%); display: none; pointer-events: none; }
+    #joy-base.on { display: block; }
+    #joy-knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; border-radius: 50%; background: rgba(255,255,255,.3); border: 2px solid rgba(255,255,255,.55); transform: translate(-50%,-50%); }
+    .tbtn { position: absolute; pointer-events: auto; border-radius: 50%; border: 2px solid rgba(255,255,255,.35); background: rgba(255,70,30,.28);
+      display: flex; align-items: center; justify-content: center; font-weight: 900; letter-spacing: .1em; font-size: 12px; text-transform: uppercase; }
+    .tbtn.on { background: rgba(255,90,40,.7); }
+    #btn-fire { right: calc(26px + env(safe-area-inset-right)); bottom: calc(30px + env(safe-area-inset-bottom)); width: 96px; height: 96px; font-size: 14px; }
+    #btn-swap { right: calc(140px + env(safe-area-inset-right)); bottom: calc(22px + env(safe-area-inset-bottom)); width: 58px; height: 58px; background: rgba(255,255,255,.12); }
+    #joy-hint { position: absolute; left: 24px; bottom: 28px; font-size: 10px; letter-spacing: .3em; opacity: .35; text-transform: uppercase; pointer-events: none; }
+    #rotate { display: none; }
+    @media (orientation: portrait) and (pointer: coarse) {
+      body.playing #rotate { display: flex; position: fixed; inset: 0; z-index: 30; background: #000; align-items: center; justify-content: center; text-align: center;
+        font-size: 15px; letter-spacing: .25em; text-transform: uppercase; padding: 30px; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" tabindex="0"></canvas>
+  <div id="dmg"></div>
+
+  <div class="hud" id="hud">
+    <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+    <div class="panel" id="hp"><div class="label">Santé</div><div class="big" id="hp-n">100</div><div class="bar"><b id="hp-bar"></b></div></div>
+    <div class="panel" id="ammo"><div class="label" id="wname">Fusil à plasma</div><div class="big" id="ammo-n">90</div></div>
+    <div class="panel" id="info"><span id="lvl-name">Niveau 1</span> · Démons : <b id="left">0</b> · Score <b id="score">0</b></div>
+    <canvas class="panel" id="minimap" width="256" height="256"></canvas>
+    <div id="banner"></div>
+  </div>
+
+  <div id="touch" hidden>
+    <div id="look-zone"></div>
+    <div id="joy-zone"></div>
+    <div id="joy-base"><div id="joy-knob"></div></div>
+    <div class="tbtn" id="btn-swap">Arme</div>
+    <div class="tbtn" id="btn-fire">Tir</div>
+  </div>
+
+  <div id="fade"></div>
+
+  <div class="screen show" id="menu">
+    <h1>HELLBOUND</h1>
+    <div class="tag">Purgez les profondeurs</div>
+    <button class="cta" id="start">Jouer</button>
+    <div id="load"></div>
+    <div class="keys desktop">
+      <div><span>Z Q S D</span>bouger</div><div><span>Souris</span>viser</div><div><span>Clic</span>tirer</div>
+      <div><span>Shift</span>courir</div><div><span>1 / 2</span>armes</div><div><span>M</span>son</div>
+    </div>
+    <div class="keys mobile">
+      <div><span>Stick gauche</span>bouger</div><div><span>Glisser à droite</span>viser</div><div><span>TIR</span>tirer</div>
+    </div>
+    <div id="best"></div>
+  </div>
+
+  <div class="screen" id="pause"><h1 style="font-size:clamp(32px,8vw,70px)">PAUSE</h1><div class="tag">Cliquez pour reprendre</div><button class="cta" id="resume">Reprendre</button></div>
+
+  <div class="screen" id="over">
+    <h1 style="font-size:clamp(40px,10vw,100px)">VOUS ÊTES MORT</h1>
+    <div class="tag" id="over-tag"></div>
+    <div class="stat">Niveau atteint <b id="o-lvl">1</b></div>
+    <div class="stat">Démons tués <b id="o-kills">0</b></div>
+    <div class="stat">Score <b id="o-score">0</b></div>
+    <div style="height:22px"></div>
+    <button class="cta" id="retry">Rejouer</button>
+  </div>
+
+  <div id="rotate">Tournez votre téléphone en mode paysage</div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
