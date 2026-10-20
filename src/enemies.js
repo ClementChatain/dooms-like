@@ -1,118 +1,209 @@
 import * as THREE from 'three';
-import { makeSkin } from './textures.js';
-
-const skins = {};
-const skin = (hex) => (skins[hex] ??= makeSkin(hex));
+import { toonGradient } from './textures.js';
 
 export const TYPES = {
-  imp:   { hp: 40,  speed: 2.6, radius: 0.5,  cy: 1.0, height: 1.9, score: 100, tint: '#6a2218', eye: 0xffa030 },
-  brute: { hp: 150, speed: 3.3, radius: 0.85, cy: 1.35, height: 2.7, score: 300, tint: '#3d3a52', eye: 0x40ff70 },
-  skull: { hp: 18,  speed: 5.2, radius: 0.38, cy: 1.35, height: 1.6, score: 60,  tint: '#d8d2c0', eye: 0x40c0ff },
+  imp:   { hp: 40,  speed: 2.6, radius: 0.5,  cy: 1.0, height: 1.9, score: 100 },
+  brute: { hp: 150, speed: 3.3, radius: 0.85, cy: 1.35, height: 2.7, score: 300 },
+  skull: { hp: 18,  speed: 5.2, radius: 0.38, cy: 1.35, height: 1.6, score: 60 },
+  boss:  { hp: 900, speed: 3.0, radius: 1.3,  cy: 2.2, height: 4.4, score: 5000 },
 };
 
-function mat(type, extra = {}) {
-  const s = skin(type.tint);
-  return new THREE.MeshStandardMaterial({
-    map: s.map, bumpMap: s.bump, bumpScale: 4, roughness: 0.55, metalness: 0.1,
-    emissive: 0x000000, ...extra,
-  });
+const WHITE = 0xffffff;
+const inkMat = new THREE.MeshBasicMaterial({ color: 0x1a1030, side: THREE.BackSide });
+
+function mat(color, extra = {}) {
+  return new THREE.MeshToonMaterial({ color, gradientMap: toonGradient(), emissive: 0x000000, ...extra });
 }
 
-function eyeMat(color) {
-  return new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(4) });
+/** Contour "dessiné" : on double chaque maillage toon par une coque inversée, légèrement grossie. */
+function outlined(g, k = 0.07) {
+  const list = [];
+  g.traverse((o) => { if (o.isMesh && o.material.isMeshToonMaterial) list.push(o); });
+  for (const m of list) {
+    const ol = new THREE.Mesh(m.geometry, inkMat);
+    ol.scale.setScalar(1 + k);
+    m.add(ol);
+  }
+}
+
+/** Grands yeux de dessin animé : blanc + iris colorée + reflet. Regardent vers -z. */
+function eyes(g, y, spread, z, r, iris) {
+  const white = new THREE.MeshBasicMaterial({ color: WHITE });
+  const pupil = new THREE.MeshBasicMaterial({ color: new THREE.Color(iris).multiplyScalar(1.6) });
+  const shine = new THREE.MeshBasicMaterial({ color: WHITE });
+  for (const sx of [-1, 1]) {
+    const w = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), white);
+    w.position.set(sx * spread, y, z); w.scale.set(1, 1.25, 0.55);
+    const p = new THREE.Mesh(new THREE.SphereGeometry(r * 0.62, 12, 8), pupil);
+    p.position.set(sx * spread, y - r * 0.05, z - r * 0.3); p.scale.set(1, 1.2, 0.5);
+    const sh = new THREE.Mesh(new THREE.SphereGeometry(r * 0.2, 8, 6), shine);
+    sh.position.set(sx * spread + r * 0.18, y + r * 0.3, z - r * 0.5);
+    g.add(w, p, sh);
+  }
+}
+
+/** Ornement de tête propre à chaque monde. Centré sur la tête, rayon r. */
+function crest(kind, r, t) {
+  const g = new THREE.Group(), body = mat(t.accent);
+  for (const sx of [-1, 1]) {
+    if (kind === 'horns') {
+      const h = new THREE.Mesh(new THREE.ConeGeometry(r * 0.25, r * 1.3, 10), body);
+      h.position.set(sx * r * 0.65, r * 0.95, 0); h.rotation.z = -sx * 0.4; g.add(h);
+    } else if (kind === 'ears') {
+      const e = new THREE.Mesh(new THREE.CapsuleGeometry(r * 0.26, r * 1.1, 4, 10), mat(t.tint));
+      e.position.set(sx * r * 0.75, r * 1.25, 0); e.rotation.z = -sx * 0.35; g.add(e);
+      const inner = new THREE.Mesh(new THREE.CapsuleGeometry(r * 0.12, r * 0.8, 4, 8), body);
+      inner.position.set(sx * r * 0.75, r * 1.25, -r * 0.1); inner.rotation.z = -sx * 0.35; g.add(inner);
+    }
+  }
+  if (kind === 'antenna') {
+    const stalk = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.06, r * 0.06, r * 1.2, 6), body);
+    stalk.position.y = r * 1.4;
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(r * 0.28, 10, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(t.eye).multiplyScalar(2) }));
+    tip.position.y = r * 2.05;
+    g.add(stalk, tip);
+  } else if (kind === 'flame') {
+    for (const [x, h] of [[-0.45, 0.9], [0, 1.3], [0.45, 0.9]]) {
+      const f = new THREE.Mesh(new THREE.ConeGeometry(r * 0.28, r * h, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(t.accent).multiplyScalar(1.5) }));
+      f.position.set(x * r, r * (0.9 + h * 0.3), 0); g.add(f);
+    }
+  }
+  return g;
 }
 
 function buildImp(t) {
-  const g = new THREE.Group(), body = mat(t), parts = { mats: [body] };
-  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 0.6, 6, 12), body);
-  torso.position.y = 1.15; torso.scale.set(1.1, 1, 0.8);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.27, 16, 12), body);
-  head.position.y = 1.78; head.scale.set(1, 0.9, 1);
-  const em = eyeMat(t.eye);
-  for (const sx of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), em);
-    eye.position.set(sx * 0.1, 1.82, -0.22); eye.scale.set(1.5, 0.8, 0.6); g.add(eye);
-    const horn = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.38, 8), mat({ tint: '#d8d2c0' }));
-    horn.position.set(sx * 0.17, 2.07, 0); horn.rotation.z = -sx * 0.35; g.add(horn);
-  }
-  const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.06, 0.16), new THREE.MeshBasicMaterial({ color: 0x220000 }));
-  jaw.position.set(0, 1.68, -0.2); g.add(jaw);
+  const g = new THREE.Group(), body = mat(t.tint), parts = { mats: [body] };
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.36, 0.55, 6, 14), body);
+  torso.position.y = 1.1; torso.scale.set(1.1, 1, 0.9);
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 10), mat(t.accent));
+  belly.position.set(0, 1.05, -0.22); belly.scale.set(1, 1.1, 0.5);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 18, 14), body);
+  head.position.y = 1.72;
+  head.add(crest(t.crest, 0.34, t));
+  g.add(torso, belly, head);
+  eyes(g, 1.76, 0.13, -0.28, 0.1, t.eye);
+  const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.04, 0.05), new THREE.MeshBasicMaterial({ color: 0x2a0a18 }));
+  mouth.position.set(0, 1.6, -0.32); g.add(mouth);
   const arms = [], legs = [];
   for (const sx of [-1, 1]) {
-    const a = new THREE.Group(); a.position.set(sx * 0.42, 1.5, 0);
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.55, 4, 8), body);
+    const a = new THREE.Group(); a.position.set(sx * 0.45, 1.45, 0);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.5, 4, 8), body);
     arm.position.y = -0.3; a.add(arm);
-    const claw = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.2, 6), mat({ tint: '#d8d2c0' }));
-    claw.position.set(0, -0.72, -0.04); claw.rotation.x = Math.PI; a.add(claw);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), mat(t.accent));
+    hand.position.y = -0.68; a.add(hand);
     g.add(a); arms.push(a);
-    const l = new THREE.Group(); l.position.set(sx * 0.18, 0.7, 0);
-    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.45, 4, 8), body);
-    leg.position.y = -0.3; l.add(leg); g.add(l); legs.push(l);
+    const l = new THREE.Group(); l.position.set(sx * 0.2, 0.7, 0);
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.12, 0.4, 4, 8), body);
+    leg.position.y = -0.3; l.add(leg);
+    const foot = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), mat(t.accent));
+    foot.position.set(0, -0.62, -0.05); foot.scale.set(1, 0.6, 1.3); l.add(foot);
+    g.add(l); legs.push(l);
   }
-  const ball = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff7a20).multiplyScalar(3) }));
-  ball.position.set(0.42, 1.0, -0.4); ball.visible = false; g.add(ball);
-  g.add(torso, head);
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(t.eye).multiplyScalar(2.5) }));
+  ball.position.set(0.45, 0.9, -0.42); ball.visible = false; g.add(ball);
+  outlined(g);
   Object.assign(parts, { arms, legs, ball, head });
   return { g, parts };
 }
 
 function buildBrute(t) {
-  const g = new THREE.Group(), body = mat(t), parts = { mats: [body] };
-  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.55, 0.7, 6, 14), body);
-  torso.position.y = 1.55; torso.scale.set(1.25, 1, 0.95);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12), body);
-  head.position.y = 2.35; head.scale.set(1.1, 0.85, 1);
-  const em = eyeMat(t.eye);
-  for (const sx of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), em);
-    eye.position.set(sx * 0.12, 2.38, -0.27); eye.scale.set(1.6, 0.7, 0.6); g.add(eye);
-    const spike = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.5, 8), mat({ tint: '#aaa0b8' }));
-    spike.position.set(sx * 0.7, 2.15, 0.05); spike.rotation.z = -sx * 0.9; g.add(spike);
-    const spike2 = spike.clone(); spike2.position.set(sx * 0.35, 2.62, 0.05); spike2.rotation.z = -sx * 0.3; spike2.scale.setScalar(0.8); g.add(spike2);
-  }
+  const g = new THREE.Group(), body = mat(t.tint), parts = { mats: [body] };
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.58, 0.65, 6, 16), body);
+  torso.position.y = 1.5; torso.scale.set(1.25, 1, 1);
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.46, 14, 10), mat(t.accent));
+  belly.position.set(0, 1.4, -0.4); belly.scale.set(1, 1.1, 0.5);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 18, 14), body);
+  head.position.y = 2.32; head.scale.set(1.15, 0.95, 1);
+  head.add(crest(t.crest, 0.4, t));
+  g.add(torso, belly, head);
+  eyes(g, 2.36, 0.17, -0.36, 0.12, t.eye);
   const arms = [], legs = [];
   for (const sx of [-1, 1]) {
-    const a = new THREE.Group(); a.position.set(sx * 0.85, 1.95, 0);
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.7, 4, 10), body);
+    const a = new THREE.Group(); a.position.set(sx * 0.88, 1.95, 0);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.65, 4, 10), body);
     arm.position.y = -0.5; a.add(arm);
-    const fist = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), body);
-    fist.position.y = -1.05; a.add(fist);
+    const fist = new THREE.Mesh(new THREE.SphereGeometry(0.34, 12, 10), mat(t.accent));
+    fist.position.y = -1.08; a.add(fist);
     g.add(a); arms.push(a);
-    const l = new THREE.Group(); l.position.set(sx * 0.35, 0.95, 0);
-    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.5, 4, 8), body);
+    const l = new THREE.Group(); l.position.set(sx * 0.36, 0.95, 0);
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.45, 4, 8), body);
     leg.position.y = -0.4; l.add(leg); g.add(l); legs.push(l);
   }
-  // glowing chest core
-  const core = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 10), eyeMat(t.eye));
-  core.position.set(0, 1.7, -0.5); g.add(core);
-  g.add(torso, head);
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(t.eye).multiplyScalar(2.5) }));
+  core.position.set(0, 1.75, -0.58); g.add(core);
+  outlined(g);
   Object.assign(parts, { arms, legs, head, core });
   return { g, parts };
 }
 
 function buildSkull(t) {
-  const g = new THREE.Group(), body = mat(t, { roughness: 0.4 }), parts = { mats: [body] };
-  const skull = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 2), body);
-  skull.position.y = 1.35; skull.scale.set(1, 1.05, 1.1);
-  const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.12, 0.26), body);
-  jaw.position.set(0, 1.04, -0.15);
-  const em = eyeMat(t.eye);
-  for (const sx of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), em);
-    eye.position.set(sx * 0.14, 1.42, -0.27); g.add(eye);
-  }
+  const g = new THREE.Group(), body = mat(t.tint), parts = { mats: [body] };
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.4, 18, 14), body);
+  skull.position.y = 1.35;
+  const jaw = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 8), mat(t.accent));
+  jaw.position.set(0, 1.02, -0.18); jaw.scale.set(1.3, 0.5, 1);
   g.add(skull, jaw);
+  // petites épines tout autour : c'est une bombe vivante
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const sp = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.28, 8), mat(t.accent));
+    sp.position.set(Math.cos(a) * 0.4, 1.35 + Math.sin(a * 2) * 0.1, Math.sin(a) * 0.4);
+    sp.rotation.set(Math.sin(a) * 1.4, 0, -Math.cos(a) * 1.4);
+    g.add(sp);
+  }
+  eyes(g, 1.42, 0.15, -0.34, 0.11, t.eye);
+  outlined(g, 0.08);
   Object.assign(parts, { jaw, skull });
   return { g, parts };
 }
 
-const BUILD = { imp: buildImp, brute: buildBrute, skull: buildSkull };
+function buildBoss(t) {
+  const g = new THREE.Group(), body = mat(t.tint), parts = { mats: [body] };
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(1.0, 0.9, 8, 18), body);
+  torso.position.y = 1.9; torso.scale.set(1.2, 1, 1.05);
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.8, 16, 12), mat(t.accent));
+  belly.position.set(0, 1.75, -0.78); belly.scale.set(1, 1.1, 0.5);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.75, 20, 16), body);
+  head.position.y = 3.55; head.scale.set(1.2, 1, 1);
+  head.add(crest(t.crest, 0.75, t));
+  // couronne
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    const sp = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.5, 8), mat(t.accent));
+    sp.position.set(Math.cos(a) * 0.5, 0.78, Math.sin(a) * 0.5 - 0.1);
+    head.add(sp);
+  }
+  g.add(torso, belly, head);
+  eyes(g, 3.6, 0.3, -0.7, 0.2, t.eye);
+  const arms = [], legs = [];
+  for (const sx of [-1, 1]) {
+    const a = new THREE.Group(); a.position.set(sx * 1.45, 2.8, 0);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 1.0, 4, 10), body);
+    arm.position.y = -0.8; a.add(arm);
+    const fist = new THREE.Mesh(new THREE.SphereGeometry(0.52, 14, 10), mat(t.accent));
+    fist.position.y = -1.6; a.add(fist);
+    g.add(a); arms.push(a);
+    const l = new THREE.Group(); l.position.set(sx * 0.6, 1.1, 0);
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 0.5, 4, 8), body);
+    leg.position.y = -0.5; l.add(leg); g.add(l); legs.push(l);
+  }
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.28, 14, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(t.eye).multiplyScalar(2.5) }));
+  core.position.set(0, 2.1, -1.05); g.add(core);
+  outlined(g, 0.05);
+  Object.assign(parts, { arms, legs, head, core });
+  return { g, parts };
+}
+
+const BUILD = { imp: buildImp, brute: buildBrute, skull: buildSkull, boss: buildBoss };
 
 export class Enemy {
-  constructor(kind, x, z, scene, scaleHp = 1) {
+  constructor(kind, x, z, scene, scaleHp = 1, skin = {}) {
     this.kind = kind;
-    this.t = TYPES[kind];
+    this.t = { ...TYPES[kind], ...skin };
+    if (skin.hp) this.t.hp = skin.hp;
+    this.flesh = new THREE.Color(this.t.tint).lerp(new THREE.Color(0xffffff), 0.25);
     const { g, parts } = BUILD[kind](this.t);
+    this.group = g;
     this.group = g; this.parts = parts;
     this.pos = { x, z };
     this.hp = this.maxHp = Math.round(this.t.hp * scaleHp);
@@ -198,6 +289,15 @@ export class Enemy {
     } else if (this.kind === 'skull') {
       moveAmt = speed * (0.85 + 0.3 * Math.sin(this.phase * 0.5));
       if (dist < 1.1) { ctx.explode(this); return; }
+    } else if (this.kind === 'boss') {
+      const ph = this.phaseNo();
+      moveAmt = speed * (0.8 + 0.15 * ph);
+      if (los && dist < 24) {
+        if (dist < 7) { mx = -dx / dist; mz = -dz / dist; moveAmt = speed * 0.9; }
+        else if (dist < 14) { const k = Math.sin(this.phase * 0.25) > 0 ? 1 : -1; mx = -dz / dist * k; mz = dx / dist * k; moveAmt = speed * 0.8; }
+        if (this.wind > 0) { this.wind -= dt; moveAmt = 0; if (this.wind <= 0) this.bossAttack(ctx, dx, dz, dist, ph); }
+        else if (this.cool <= 0) { this.wind = 0.9 - 0.1 * ph; this.cool = 3.2 - 0.55 * ph + Math.random() * 0.8; }
+      } else this.wind = 0;
     }
 
     const step = moveAmt * dt;
@@ -212,6 +312,24 @@ export class Enemy {
       }
     }
     this.animate(dt, moveAmt / speed, dist);
+  }
+
+  /** 1 → 3 selon les points de vie restants : chaque phase ajoute une attaque. */
+  phaseNo() { const r = this.hp / this.maxHp; return r > 0.66 ? 1 : r > 0.33 ? 2 : 3; }
+
+  bossAttack(ctx, dx, dz, dist, ph) {
+    const sy = 2.3, base = Math.atan2(dx, dz);
+    this.atk = (this.atk ?? 0) + 1;
+    const shoot = (ang) => {
+      const ddx = Math.sin(ang), ddz = Math.cos(ang);
+      ctx.spawnFireball(this.pos.x, sy, this.pos.z, ddx * 0.97, (1.2 - sy) / 14, ddz * 0.97);
+    };
+    if (ph >= 3 && this.atk % 3 === 0) { for (let i = 0; i < 14; i++) shoot((i / 14) * Math.PI * 2); return; } // anneau
+    const n = ph === 1 ? 1 : ph === 2 ? 2 : 3;
+    for (let i = -n; i <= n; i++) shoot(base + i * 0.2); // éventail
+    if (ph >= 2 && this.atk % 2 === 0) { // renforts
+      for (const sx of [-1, 1]) ctx.spawnMinion('skull', this.pos.x + sx * 2.2, this.pos.z);
+    }
   }
 
   fire(ctx, dx, dz, dist) {
@@ -240,7 +358,8 @@ export class Enemy {
       p.jaw.rotation.x = Math.sin(this.phase * 3) * 0.3 + 0.25;
       g.rotation.z = Math.sin(this.phase) * 0.12;
     } else g.position.y = Math.abs(Math.sin(this.phase * 1.6)) * 0.05 * moving;
-    if (p.core) p.core.scale.setScalar(1 + Math.sin(this.phase * 2) * 0.2);
+    if (this.kind === 'boss' && this.wind > 0) { p.arms[0].rotation.x = p.arms[1].rotation.x = -2.6; }
+    if (p.core) p.core.scale.setScalar(1 + Math.sin(this.phase * 2) * 0.2 + (this.kind === 'boss' && this.wind > 0 ? 0.8 : 0));
     if (p.ball?.visible) p.ball.scale.setScalar(0.6 + (0.55 - this.wind) * 1.4);
   }
 

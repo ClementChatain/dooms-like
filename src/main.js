@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { makeBricks, makeFloor, makeCeiling, makeGlow } from './textures.js';
-import { LevelData, LevelView, THEMES, CELL, WALL_H } from './level.js';
+import { makeWorldTextures, makeGlow } from './textures.js';
+import { LevelData, LevelView, CELL, WALL_H } from './level.js';
+import { STAGES, WORLDS, firstStageOfWorld } from './campaign.js';
 import { Enemy, TYPES } from './enemies.js';
 import { WeaponRig, WEAPONS } from './weapons.js';
 import { Particles, createComposer } from './fx.js';
@@ -11,6 +12,7 @@ const $ = (s) => document.querySelector(s);
 const mobile = isTouch();
 const EYE = 1.6;
 const PLAYER_R = 0.42;
+const HEAD = 5; // intensité de la lampe frontale au repos
 const MAX_AMMO = { cells: 240, shells: 48 };
 
 // hit spheres [absolute y, radius] per enemy type (last one = head)
@@ -18,12 +20,13 @@ const HIT = {
   imp:   [[0.7, 0.42], [1.2, 0.45], [1.78, 0.3]],
   brute: [[0.9, 0.6], [1.6, 0.8], [2.35, 0.38]],
   skull: [[1.35, 0.42]],
+  boss:  [[1.1, 1.15], [2.3, 1.25], [3.55, 0.8]],
 };
 
 // ---------------------------------------------------------------- renderer
 const canvas = $('#game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMapping = THREE.NeutralToneMapping;
 renderer.toneMappingExposure = 1.0;
 let pixelRatio = Math.min(window.devicePixelRatio || 1, mobile ? 1.25 : 1.75);
 const maxPixelRatio = pixelRatio;
@@ -35,7 +38,7 @@ camera.rotation.order = 'YXZ';
 scene.add(camera);
 const hemi = new THREE.HemisphereLight(0x806050, 0x1a0e0a, 0.9);
 scene.add(hemi);
-const headlamp = new THREE.PointLight(0xffb070, 14, 12, 1.6);
+const headlamp = new THREE.PointLight(0xffb070, HEAD, 12, 1.6);
 camera.add(headlamp);
 
 const fx = createComposer(renderer, scene, camera, { mobile });
@@ -56,7 +59,6 @@ addEventListener('resize', resize);
 resize();
 
 // ---------------------------------------------------------------- assets
-const tex = { wall: makeBricks(), floor: makeFloor(), ceil: makeCeiling() };
 const glowTex = makeGlow();
 const rig = new WeaponRig(camera, glowTex);
 const audio = new Audio();
@@ -78,18 +80,19 @@ const player = {
   pos: { x: 0, z: 0 }, yaw: 0, pitch: 0, hp: 100, vx: 0, vz: 0,
   ammo: { cells: 90, shells: 12 }, cool: 0, bobT: 0, speed: 0, dmgT: 0, healT: 0, shake: 0, deadT: 0,
 };
-let state = 'menu'; // menu | playing | paused | dead | transition
-let levelNo = 1, data = null, view = null;
+let state = 'menu'; // menu | playing | paused | dead | transition | won
+let levelNo = 1, stageIdx = 0, stage = STAGES[0], data = null, view = null, boss = null;
+let worldStartScore = 0;
 let enemies = [], projectiles = [], pickups = [];
 let score = 0, kills = 0, time = 0, totalLeft = 0;
 let best = 0;
-try { best = +localStorage.getItem('hellbound-best') || 0; } catch {}
+try { best = +localStorage.getItem('prisma-best') || 0; } catch {}
 let seen = null;
 const ctx = { player, enemies, audio };
 
 const el = {
   hpN: $('#hp-n'), hpBar: $('#hp-bar'), ammoN: $('#ammo-n'), wname: $('#wname'), left: $('#left'), score: $('#score'),
-  lvl: $('#lvl-name'), banner: $('#banner'), cross: $('#crosshair'), mini: $('#minimap'), fade: $('#fade'),
+  lvl: $('#lvl-name'), bossBar: $('#boss'), bossName: $('#boss-name'), bossFill: $('#boss-fill'), banner: $('#banner'), cross: $('#crosshair'), mini: $('#minimap'), fade: $('#fade'),
 };
 
 function showBanner(text, sub = '', ms = 2600) {
@@ -108,6 +111,8 @@ function updateHud() {
   el.ammoN.textContent = player.ammo[w.ammo];
   el.left.textContent = totalLeft;
   el.score.textContent = score;
+  el.bossBar.style.display = boss && !boss.dead ? 'block' : 'none';
+  if (boss) el.bossFill.style.width = Math.max(0, (boss.hp / boss.maxHp) * 100) + '%';
 }
 
 // ---------------------------------------------------------------- level
@@ -129,66 +134,86 @@ function spawnPickup(kind, x, z) {
   pickups.push({ kind, mesh: g, body: m, x, z, phase: Math.random() * 6 });
 }
 
-function startLevel(n) {
+function startLevel(idx) {
   disposeLevel();
-  levelNo = n;
-  const theme = THEMES[(n - 1) % THEMES.length];
-  do { data = new LevelData(n); } while (data.rooms.length < 4);
-  view = new LevelView(data, tex, glowTex, theme, mobile ? 4 : 6);
+  stageIdx = idx; stage = STAGES[idx]; levelNo = stage.n; boss = null;
+  const { world } = stage, n = levelNo;
+  const theme = world.theme;
+  if (stage.boss) data = new LevelData(n, { arena: true });
+  else do { data = new LevelData(n); } while (data.rooms.length < 4);
+  view = new LevelView(data, makeWorldTextures(world), glowTex, theme, mobile ? 4 : 6);
   scene.add(view.group);
-  scene.fog = new THREE.FogExp2(theme.fog, 0.045);
+  scene.fog = new THREE.FogExp2(theme.fog, theme.density);
   scene.background = new THREE.Color(theme.fog);
-  hemi.color.setHex(theme.ambient); hemi.groundColor.setHex(0x0a0504);
-  hemi.intensity = 1.5;
+  hemi.color.setHex(theme.ambient); hemi.groundColor.setHex(theme.ground);
+  hemi.intensity = 1.0;
   headlamp.color.setHex(theme.torch).lerp(new THREE.Color(0xffffff), 0.5);
 
-  const st = data.start;
+  const st = data.spawn ?? data.start;
   player.pos.x = (st.cx + 0.5) * CELL; player.pos.z = (st.cy + 0.5) * CELL;
-  // look toward the nearest open direction
-  let best = 0, bd = -1;
-  for (let a = 0; a < 8; a++) {
-    const yaw = (a / 8) * Math.PI * 2;
-    const d = data.rayWall(player.pos.x, player.pos.z, -Math.sin(yaw), -Math.cos(yaw), 60);
-    if (d > bd) { bd = d; best = yaw; }
+  if (data.spawn) player.yaw = 0; // l'arène regarde vers le boss (-z)
+  else {
+    // look toward the nearest open direction
+    let best = 0, bd = -1;
+    for (let a = 0; a < 8; a++) {
+      const yaw = (a / 8) * Math.PI * 2;
+      const d = data.rayWall(player.pos.x, player.pos.z, -Math.sin(yaw), -Math.cos(yaw), 60);
+      if (d > bd) { bd = d; best = yaw; }
+    }
+    player.yaw = best;
   }
-  player.yaw = best; player.pitch = 0;
+  player.pitch = 0;
   seen = new Uint8Array(data.w * data.h);
 
-  // enemies
-  const count = Math.min(4 + n * 3, 34);
-  const rooms = data.rooms.filter((r) => r !== st);
-  const hpScale = 1 + 0.07 * (n - 1);
-  for (let i = 0; i < count; i++) {
-    const room = rooms[Math.floor(data.rand() * rooms.length)];
-    const p = data.randomFloorIn(room);
-    if (Math.hypot(p.x - player.pos.x, p.z - player.pos.z) < 10) continue;
-    const r = data.rand();
-    const bruteP = n < 2 ? 0 : Math.min(0.12 + n * 0.03, 0.3);
-    const kind = r < bruteP ? 'brute' : r < bruteP + 0.18 ? 'skull' : 'imp';
-    enemies.push(new Enemy(kind, p.x, p.z, scene, hpScale));
+  const hpScale = 1 + 0.06 * (n - 1);
+  if (stage.boss) {
+    const bs = data.bossSpawn;
+    boss = new Enemy('boss', (bs.cx + 0.5) * CELL, (bs.cy + 0.5) * CELL, scene, 1 + 0.03 * (n - 1), world.boss);
+    boss.state = 'chase';
+    enemies.push(boss);
+    for (const [dx, dz] of [[-1, 0], [1, 0]]) spawnPickup('health', player.pos.x + dx * 3, player.pos.z + 1.5);
+    spawnPickup('cells', player.pos.x, player.pos.z + 3);
+    spawnPickup('shells', player.pos.x + 3, player.pos.z + 3);
+  } else {
+    // enemies
+    const count = Math.min(5 + stage.map * 3 + stage.w * 3, 30);
+    const rooms = data.rooms.filter((r) => r !== data.start);
+    for (let i = 0; i < count; i++) {
+      const room = rooms[Math.floor(data.rand() * rooms.length)];
+      const p = data.randomFloorIn(room);
+      if (Math.hypot(p.x - player.pos.x, p.z - player.pos.z) < 10) continue;
+      const r = data.rand();
+      const bruteP = n < 3 ? 0 : Math.min(0.1 + n * 0.02, 0.28);
+      const kind = r < bruteP ? 'brute' : r < bruteP + 0.18 ? 'skull' : 'imp';
+      enemies.push(new Enemy(kind, p.x, p.z, scene, hpScale, world.enemies[kind]));
+    }
+    // pickups
+    for (const room of data.rooms) {
+      const reps = room === data.start ? 0 : data.rand() < 0.6 ? 1 : 0;
+      for (let k = 0; k < reps; k++) {
+        const p = data.randomFloorIn(room);
+        const r = data.rand();
+        spawnPickup(r < 0.4 ? 'health' : r < 0.75 ? 'cells' : 'shells', p.x, p.z);
+      }
+    }
   }
   totalLeft = enemies.length;
 
-  // pickups
-  for (const room of data.rooms) {
-    const reps = room === st ? 0 : data.rand() < 0.6 ? 1 : 0;
-    for (let k = 0; k < reps; k++) {
-      const p = data.randomFloorIn(room);
-      const r = data.rand();
-      spawnPickup(r < 0.4 ? 'health' : r < 0.75 ? 'cells' : 'shells', p.x, p.z);
-    }
-  }
-  el.lvl.textContent = `Niv. ${n} · ${theme.name}`;
-  showBanner(`Niveau ${n}`, theme.name);
+  const label = stage.boss ? `Boss · ${world.boss.name}` : `Monde ${stage.w + 1} · Carte ${stage.map}/3`;
+  el.lvl.textContent = `${world.name} · ${label}`;
+  if (stage.boss) showBanner(world.boss.name, 'Combat de boss', 3200);
+  else if (stage.map === 1) showBanner(world.name, world.tagline, 3600);
+  else showBanner(`Carte ${stage.map}`, world.name);
   updateHud();
 }
 
-function newGame() {
+function newGame(fromWorld = 0) {
   player.hp = 100; player.ammo.cells = 90; player.ammo.shells = 12;
   player.dmgT = 0; player.deadT = 0; player.cool = 0; player.vx = player.vz = 0;
-  score = 0; kills = 0;
+  if (fromWorld === 0) { score = 0; kills = 0; } else score = worldStartScore;
+  worldStartScore = score;
   rig.show(0); rig.next = -1;
-  startLevel(1);
+  startLevel(firstStageOfWorld(fromWorld));
 }
 
 // ---------------------------------------------------------------- combat helpers
@@ -209,17 +234,27 @@ function killEnemy(e, byPlayer) {
   if (byPlayer) { score += e.t.score * levelNo; kills++; }
   else kills++;
   totalLeft--;
-  audio.enemyDie(e.kind === 'brute');
-  particles.burst(e.pos.x, e.t.cy, e.pos.z, e.kind === 'brute' ? 40 : 24, gore, 5, 0.22, 0.8, 9);
+  audio.enemyDie(e.kind === 'brute' || e.kind === 'boss');
+  particles.burst(e.pos.x, e.t.cy, e.pos.z, e.kind === 'boss' ? 90 : e.kind === 'brute' ? 40 : 24, e.flesh, 5, 0.22, 0.8, 9);
   particles.burst(e.pos.x, e.t.cy, e.pos.z, 10, sparkOrange, 7, 0.14, 0.5, 9);
-  if (Math.random() < (e.kind === 'brute' ? 0.9 : 0.35)) {
+  if (e.kind === 'boss') {
+    // les renforts disparaissent avec leur maître
+    for (const o of enemies) {
+      if (o === e || o.dead) continue;
+      o.dead = true; o.deadT = 0; o.hp = 0; totalLeft--; kills++;
+      particles.burst(o.pos.x, 1.3, o.pos.z, 20, o.flesh, 5, 0.2, 0.7, 6);
+    }
+    audio.explode();
+  }
+  if (e.kind !== 'boss' && Math.random() < (e.kind === 'brute' ? 0.9 : 0.35)) {
     const r = Math.random();
     const need = player.hp < 60 ? 0.5 : 0.2;
     spawnPickup(r < need ? 'health' : r < 0.7 ? 'cells' : 'shells', e.pos.x, e.pos.z);
   }
   if (totalLeft <= 0) {
     view.unlockExit(); audio.unlock();
-    showBanner('Sortie ouverte', 'Rejoignez le portail vert', 3600);
+    if (stage.boss) showBanner('Victoire !', 'Rejoignez le portail', 3600);
+    else showBanner('Sortie ouverte', 'Rejoignez le portail vert', 3600);
   }
   updateHud();
 }
@@ -239,12 +274,20 @@ function spawnFireball(x, y, z, dx, dy, dz) {
   const s = new THREE.Sprite(fireGlowMat); s.scale.set(1.4, 1.4, 1); g.add(s);
   g.position.set(x, y, z);
   scene.add(g);
-  const sp = 9 + Math.min(levelNo, 8) * 0.5;
+  const sp = 8 + Math.min(levelNo, 12) * 0.4;
   projectiles.push({ mesh: g, x, y, z, vx: dx * sp, vy: dy * sp, vz: dz * sp, life: 5 });
   audio.fireball();
 }
 
-Object.assign(ctx, { level: null, hurtPlayer, spawnFireball, explode });
+function spawnMinion(kind, x, z) {
+  if (data.isWall(Math.floor(x / CELL), Math.floor(z / CELL))) return;
+  const m = new Enemy(kind, x, z, scene, 1, stage.world.enemies[kind]);
+  m.state = 'chase';
+  enemies.push(m); totalLeft++;
+  particles.burst(x, 1.3, z, 16, m.flesh, 4, 0.2, 0.6, 2);
+}
+
+Object.assign(ctx, { level: null, hurtPlayer, spawnFireball, explode, spawnMinion });
 
 function alertEnemies(radius) {
   for (const e of enemies) {
@@ -261,7 +304,7 @@ function shoot() {
   rig.fire();
   player.pitch += w.kick * 0.35;
   player.shake = Math.min(0.06, player.shake + w.shake);
-  headlamp.intensity = 70;
+  headlamp.intensity = 40;
   alertEnemies(26);
 
   _o.set(player.pos.x, EYE, player.pos.z);
@@ -307,7 +350,7 @@ function shoot() {
     if (bestE) {
       hitAny = true;
       const dmg = w.dmg * (bestHead ? 1.6 : 1);
-      particles.burst(hx, hy, hz, 5, gore, 3.5, 0.1, 0.35, 8);
+      particles.burst(hx, hy, hz, 5, bestE.flesh, 3.5, 0.1, 0.35, 8);
       particles.burst(hx, hy, hz, 2, sparkOrange, 4, 0.08, 0.25, 8);
       if (bestE.damage(dmg)) { killEnemy(bestE, true); killed = true; }
       else audio.enemyHurt();
@@ -329,7 +372,7 @@ function die() {
   input.releaseLock();
   input.fire = false;
   best = Math.max(best, score);
-  try { localStorage.setItem('hellbound-best', best); } catch {}
+  try { localStorage.setItem('prisma-best', best); } catch {}
 }
 
 // ---------------------------------------------------------------- update
@@ -416,14 +459,28 @@ function nextLevel() {
   state = 'transition';
   audio.portal();
   el.fade.classList.add('on');
+  const last = stageIdx >= STAGES.length - 1;
   setTimeout(() => {
     player.hp = Math.min(100, player.hp + 30);
     player.ammo.cells = Math.min(MAX_AMMO.cells, player.ammo.cells + 40);
     player.ammo.shells = Math.min(MAX_AMMO.shells, player.ammo.shells + 8);
-    startLevel(levelNo + 1);
+    if (last) { victory(); return; }
+    if (stage.boss) worldStartScore = score; // nouveau monde : point de reprise
+    startLevel(stageIdx + 1);
     el.fade.classList.remove('on');
     state = 'playing';
   }, 700);
+}
+
+function victory() {
+  state = 'won';
+  input.releaseLock(); input.fire = false;
+  best = Math.max(best, score);
+  try { localStorage.setItem('prisma-best', best); } catch {}
+  $('#w-kills').textContent = kills; $('#w-score').textContent = score;
+  document.body.classList.remove('playing');
+  el.fade.classList.remove('on');
+  showScreen('win');
 }
 
 // ---------------------------------------------------------------- minimap
@@ -441,7 +498,7 @@ function drawMinimap() {
   for (let j = 0; j <= R * 2 + 1; j++) for (let i = 0; i <= R * 2 + 1; i++) {
     const x = Math.floor(ox) + i, z = Math.floor(oz) + j;
     if (x < 0 || z < 0 || x >= data.w || z >= data.h || !seen[z * data.w + x]) continue;
-    mctx.fillStyle = data.isWall(x, z) ? 'rgba(255,255,255,.28)' : 'rgba(255,120,60,.2)';
+    mctx.fillStyle = data.isWall(x, z) ? 'rgba(255,255,255,.3)' : 'rgba(120,200,255,.2)';
     mctx.fillRect((x - ox) * cs, (z - oz) * cs, cs + 0.5, cs + 0.5);
   }
   const dot = (wx, wz, color, r) => {
@@ -450,8 +507,8 @@ function drawMinimap() {
     mctx.fillStyle = color; mctx.beginPath(); mctx.arc(x, y, r, 0, 7); mctx.fill();
   };
   const ex = view.exit;
-  dot(ex.x, ex.z, ex.unlocked ? '#3dffb0' : '#ff3030', 7);
-  for (const e of enemies) if (!e.dead && seen[Math.floor(e.pos.z / CELL) * data.w + Math.floor(e.pos.x / CELL)]) dot(e.pos.x, e.pos.z, '#ff4020', 5);
+  if (ex.visible) dot(ex.x, ex.z, ex.unlocked ? '#3dffb0' : '#ff3030', 7);
+  for (const e of enemies) if (!e.dead && seen[Math.floor(e.pos.z / CELL) * data.w + Math.floor(e.pos.x / CELL)]) dot(e.pos.x, e.pos.z, e.kind === 'boss' ? '#ffd84a' : '#ff4020', e.kind === 'boss' ? 8 : 5);
   mctx.save();
   mctx.translate(S / 2, S / 2); mctx.rotate(-player.yaw);
   mctx.fillStyle = '#fff'; mctx.beginPath(); mctx.moveTo(0, -10); mctx.lineTo(7, 8); mctx.lineTo(-7, 8); mctx.closePath(); mctx.fill();
@@ -459,7 +516,7 @@ function drawMinimap() {
 }
 
 // ---------------------------------------------------------------- flow control
-const screens = { menu: $('#menu'), pause: $('#pause'), over: $('#over') };
+const screens = { menu: $('#menu'), pause: $('#pause'), over: $('#over'), win: $('#win') };
 function showScreen(name) { for (const k in screens) screens[k].classList.toggle('show', k === name); }
 
 function beginPlay() {
@@ -474,7 +531,8 @@ function beginPlay() {
 }
 
 $('#start').addEventListener('click', () => { newGame(); beginPlay(); });
-$('#retry').addEventListener('click', () => { newGame(); beginPlay(); });
+$('#retry').addEventListener('click', () => { newGame(stage.w); beginPlay(); });
+$('#again').addEventListener('click', () => { newGame(); beginPlay(); });
 $('#resume').addEventListener('click', () => { if (state === 'paused') beginPlay(); });
 $('#pause').addEventListener('click', () => { if (state === 'paused') beginPlay(); });
 input.onLockChange = (locked) => {
@@ -517,7 +575,7 @@ function frame(now) {
     updateWorld(dt * 0.6);
     input.poll();
     if (player.deadT > 1.6 && !screens.over.classList.contains('show')) {
-      $('#o-lvl').textContent = levelNo; $('#o-kills').textContent = kills; $('#o-score').textContent = score;
+      $('#o-lvl').textContent = stage.boss ? `Boss · ${stage.world.name}` : `${stage.world.name} · Carte ${stage.map}`; $('#o-kills').textContent = kills; $('#o-score').textContent = score;
       $('#over-tag').textContent = score >= best && score > 0 ? 'Nouveau record !' : `Meilleur score : ${best}`;
       document.body.classList.remove('playing');
       showScreen('over');
@@ -537,7 +595,7 @@ function frame(now) {
   player.shake *= Math.pow(0.002, dt);
 
   rig.update(dt, player.speed, time);
-  headlamp.intensity += (14 - headlamp.intensity) * Math.min(1, dt * 18);
+  headlamp.intensity += (HEAD - headlamp.intensity) * Math.min(1, dt * 18);
   view.update(dt, time, player.pos);
   particles.update(dt);
 
@@ -545,7 +603,7 @@ function frame(now) {
   player.healT = Math.max(0, player.healT - dt * 2);
   fx.grade.uniforms.time.value = time;
   fx.grade.uniforms.damage.value = state === 'dead' ? 0.8 : dmgTarget * 0.9 + (player.hp < 30 ? (0.18 + 0.12 * Math.sin(time * 6)) * (1 - player.hp / 30) : 0);
-  fx.grade.uniforms.flash.value = Math.max(0, headlamp.intensity - 14) / 56;
+  fx.grade.uniforms.flash.value = Math.max(0, headlamp.intensity - HEAD) / 56;
   fx.grade.uniforms.heal.value = player.healT;
 
   miniT -= dt;
@@ -557,12 +615,12 @@ function frame(now) {
 }
 
 // boot
-startLevel(1);
+startLevel(0);
 $('#best').textContent = best ? `Meilleur score : ${best}` : '';
 requestAnimationFrame(frame);
 
 // debugging / automated tests
 window.__game = {
   get state() { return state; }, player, get enemies() { return enemies; }, get data() { return data; }, get view() { return view; },
-  startLevel, newGame, shoot, setState: (s) => (state = s), get totalLeft() { return totalLeft; },
+  ctx, startLevel, newGame, shoot, setState: (s) => (state = s), get totalLeft() { return totalLeft; },
 };

@@ -15,121 +15,103 @@ function canvas(size) {
   return c;
 }
 
-function noiseOverlay(ctx, size, amount, rnd) {
-  const img = ctx.getImageData(0, 0, size, size);
-  const d = img.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const n = (rnd() - 0.5) * amount;
-    d[i] += n; d[i + 1] += n; d[i + 2] += n;
-  }
-  ctx.putImageData(img, 0, 0);
-}
-
-function blobs(ctx, size, count, rgba, rmin, rmax, rnd) {
-  for (let i = 0; i < count; i++) {
-    const x = rnd() * size, y = rnd() * size, r = rmin + rnd() * (rmax - rmin);
-    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, rgba.replace('A', (0.25 * rnd()).toFixed(3)));
-    g.addColorStop(1, rgba.replace('A', '0'));
-    ctx.fillStyle = g;
-    // wrap around so the texture tiles
-    for (const ox of [-size, 0, size]) for (const oy of [-size, 0, size]) {
-      ctx.save(); ctx.translate(ox, oy); ctx.fillRect(x - r, y - r, r * 2, r * 2); ctx.restore();
-    }
-  }
-}
-
-function toTexture(c, srgb = true) {
+function toTexture(c) {
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.anisotropy = 8;
-  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
 
-/** Brick wall: returns { map, bump } */
-export function makeBricks(size = 512) {
-  const rnd = mulberry32(1337);
-  const col = canvas(size), hgt = canvas(size);
-  const c = col.getContext('2d'), h = hgt.getContext('2d');
-  c.fillStyle = '#2a2420'; c.fillRect(0, 0, size, size);
-  h.fillStyle = '#000'; h.fillRect(0, 0, size, size);
-  const rows = 8, bh = size / rows, bw = size / 4, gap = 5;
-  for (let r = 0; r < rows; r++) {
-    const off = (r % 2) * (bw / 2);
-    for (let i = -1; i < 5; i++) {
-      const x = i * bw + off + gap / 2, y = r * bh + gap / 2;
-      const l = 38 + rnd() * 22, s = 18 + rnd() * 14, hue = 8 + rnd() * 18;
-      c.fillStyle = `hsl(${hue} ${s}% ${l}%)`;
-      h.fillStyle = `rgb(${150 + rnd() * 80},${150 + rnd() * 80},${150 + rnd() * 80})`;
-      for (const [ox] of [[0], [size]]) {
-        c.fillRect(x + ox - size * 0, y, bw - gap, bh - gap);
-        h.fillRect(x, y, bw - gap, bh - gap);
-      }
-      // chipped edge highlight
-      c.fillStyle = 'rgba(255,255,255,0.07)'; c.fillRect(x, y, bw - gap, 3);
-      c.fillStyle = 'rgba(0,0,0,0.25)'; c.fillRect(x, y + bh - gap - 3, bw - gap, 3);
-    }
+/** Dégradé à 3 paliers : c'est lui qui donne l'aspect "cel-shading" aux matériaux toon. */
+let _grad = null;
+export function toonGradient() {
+  if (!_grad) {
+    _grad = new THREE.DataTexture(Uint8Array.from([120, 195, 255]), 3, 1, THREE.RedFormat);
+    _grad.minFilter = _grad.magFilter = THREE.NearestFilter;
+    _grad.needsUpdate = true;
   }
-  blobs(c, size, 40, 'rgba(10,6,4,A)', 30, 90, rnd);
-  blobs(h, size, 30, 'rgba(0,0,0,A)', 20, 60, rnd);
-  noiseOverlay(c, size, 38, rnd);
-  noiseOverlay(h, size, 60, rnd);
-  return { map: toTexture(col), bump: toTexture(hgt, false) };
+  return _grad;
 }
 
-/** Stone floor tiles */
-export function makeFloor(size = 512) {
-  const rnd = mulberry32(42);
-  const col = canvas(size), hgt = canvas(size);
-  const c = col.getContext('2d'), h = hgt.getContext('2d');
-  c.fillStyle = '#0d0c0c'; c.fillRect(0, 0, size, size);
-  h.fillStyle = '#000'; h.fillRect(0, 0, size, size);
-  const n = 4, t = size / n, gap = 6;
-  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
-    const l = 22 + rnd() * 10;
-    c.fillStyle = `hsl(${20 + rnd() * 10} 8% ${l}%)`;
-    c.fillRect(x * t + gap / 2, y * t + gap / 2, t - gap, t - gap);
-    const v = 150 + rnd() * 80;
-    h.fillStyle = `rgb(${v},${v},${v})`;
-    h.fillRect(x * t + gap / 2, y * t + gap / 2, t - gap, t - gap);
-    // cracks
-    if (rnd() < 0.5) {
-      c.strokeStyle = 'rgba(0,0,0,0.5)'; c.lineWidth = 1.5; c.beginPath();
-      let px = x * t + rnd() * t, py = y * t + rnd() * t; c.moveTo(px, py);
-      for (let k = 0; k < 5; k++) { px += (rnd() - 0.5) * 40; py += (rnd() - 0.5) * 40; c.lineTo(px, py); }
-      c.stroke();
-    }
-  }
-  blobs(c, size, 50, 'rgba(0,0,0,A)', 30, 100, rnd);
-  blobs(c, size, 12, 'rgba(90,20,10,A)', 15, 50, rnd);
-  noiseOverlay(c, size, 30, rnd);
-  noiseOverlay(h, size, 70, rnd);
-  return { map: toTexture(col), bump: toTexture(hgt, false) };
+const INK_W = 9; // épaisseur des contours dessinés dans les textures
+
+function rect(c, x, y, w, h, fill, ink, hi = true) {
+  c.fillStyle = fill; c.fillRect(x, y, w, h);
+  if (hi) { c.fillStyle = 'rgba(255,255,255,.22)'; c.fillRect(x, y, w, h * 0.22); }
+  c.strokeStyle = ink; c.lineWidth = INK_W; c.strokeRect(x, y, w, h);
 }
 
-/** Riveted metal ceiling panels */
-export function makeCeiling(size = 512) {
-  const rnd = mulberry32(7);
-  const col = canvas(size), hgt = canvas(size);
-  const c = col.getContext('2d'), h = hgt.getContext('2d');
-  c.fillStyle = '#16171a'; c.fillRect(0, 0, size, size);
-  h.fillStyle = '#000'; h.fillRect(0, 0, size, size);
-  const n = 2, t = size / n, gap = 8;
-  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
-    const l = 14 + rnd() * 6;
-    c.fillStyle = `hsl(220 6% ${l}%)`;
-    c.fillRect(x * t + gap / 2, y * t + gap / 2, t - gap, t - gap);
-    h.fillStyle = '#c8c8c8';
-    h.fillRect(x * t + gap / 2, y * t + gap / 2, t - gap, t - gap);
-    for (const [rx, ry] of [[20, 20], [t - 20, 20], [20, t - 20], [t - 20, t - 20]]) {
-      c.fillStyle = '#333'; c.beginPath(); c.arc(x * t + rx, y * t + ry, 5, 0, 7); c.fill();
-      h.fillStyle = '#fff'; h.beginPath(); h.arc(x * t + rx, y * t + ry, 5, 0, 7); h.fill();
+/** Dessine une tuile de mur selon le style du monde. */
+function drawWall(c, size, p, rnd) {
+  c.fillStyle = p.mortar; c.fillRect(0, 0, size, size);
+  const pick = () => p.wall[rnd() < 0.5 ? 0 : 1];
+  if (p.style === 'bricks' || p.style === 'lava') {
+    const rows = 6, bh = size / rows, bw = size / 3;
+    for (let r = 0; r < rows; r++) {
+      const off = (r % 2) * (bw / 2);
+      for (let i = -1; i < 4; i++) rect(c, i * bw + off + 4, r * bh + 4, bw - 8, bh - 8, pick(), p.ink);
+    }
+    if (p.style === 'lava') { // joints incandescents : on repasse le mortier en couleur vive
+      c.strokeStyle = p.accent; c.lineWidth = 3;
+      for (let r = 0; r <= rows; r++) { c.beginPath(); c.moveTo(0, r * bh); c.lineTo(size, r * bh); c.stroke(); }
+    }
+  } else if (p.style === 'crystal') {
+    const n = 3, t = size / n;
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      const x0 = x * t, y0 = y * t;
+      c.fillStyle = p.wall[0]; c.beginPath(); c.moveTo(x0, y0); c.lineTo(x0 + t, y0); c.lineTo(x0, y0 + t); c.closePath(); c.fill();
+      c.fillStyle = p.wall[1]; c.beginPath(); c.moveTo(x0 + t, y0); c.lineTo(x0 + t, y0 + t); c.lineTo(x0, y0 + t); c.closePath(); c.fill();
+      c.fillStyle = 'rgba(255,255,255,.35)'; c.beginPath(); c.moveTo(x0 + 10, y0 + 10); c.lineTo(x0 + t * 0.45, y0 + 10); c.lineTo(x0 + 10, y0 + t * 0.45); c.closePath(); c.fill();
+      c.strokeStyle = p.ink; c.lineWidth = INK_W;
+      c.strokeRect(x0, y0, t, t);
+      c.beginPath(); c.moveTo(x0 + t, y0); c.lineTo(x0, y0 + t); c.stroke();
+    }
+  } else { // panels : grands panneaux avec liseré néon
+    const n = 2, t = size / n;
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      rect(c, x * t + 6, y * t + 6, t - 12, t - 12, pick(), p.ink, false);
+      c.strokeStyle = p.accent; c.lineWidth = 5;
+      c.strokeRect(x * t + 26, y * t + 26, t - 52, t - 52);
+      c.fillStyle = p.accent;
+      c.fillRect(x * t + t / 2 - 28, y * t + t / 2 - 5, 56, 10);
     }
   }
-  blobs(c, size, 40, 'rgba(0,0,0,A)', 30, 100, rnd);
-  noiseOverlay(c, size, 20, rnd);
-  return { map: toTexture(col), bump: toTexture(hgt, false) };
+}
+
+function drawFloor(c, size, p) {
+  const n = 4, t = size / n;
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    rect(c, x * t, y * t, t, t, p.floor[(x + y) % 2], p.ink, false);
+  }
+  if (p.style === 'panels') { // fines lignes néon au sol
+    c.strokeStyle = p.accent; c.globalAlpha = 0.5; c.lineWidth = 3;
+    c.strokeRect(t / 2, t / 2, size - t, size - t);
+    c.globalAlpha = 1;
+  }
+}
+
+function drawCeil(c, size, p) {
+  c.fillStyle = p.ceil; c.fillRect(0, 0, size, size);
+  const n = 2, t = size / n;
+  c.strokeStyle = p.ink; c.lineWidth = INK_W;
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) c.strokeRect(x * t, y * t, t, t);
+  c.fillStyle = 'rgba(255,255,255,.1)';
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) c.fillRect(x * t + 8, y * t + 8, t - 16, t * 0.2);
+}
+
+const _cache = {};
+/** Textures mur / sol / plafond d'un monde (mises en cache). Renvoie { wall, floor, ceil } avec .map. */
+export function makeWorldTextures(world) {
+  if (_cache[world.id]) return _cache[world.id];
+  const p = world.palette, rnd = mulberry32(world.id.length * 7919 + world.id.charCodeAt(0));
+  const out = {};
+  for (const [key, draw] of [['wall', drawWall], ['floor', drawFloor], ['ceil', drawCeil]]) {
+    const c = canvas(512);
+    draw(c.getContext('2d'), 512, p, rnd);
+    out[key] = { map: toTexture(c) };
+  }
+  return (_cache[world.id] = out);
 }
 
 /** Soft radial glow used by sprites */
@@ -144,23 +126,4 @@ export function makeGlow(size = 128) {
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
-}
-
-/** Cracked, veined demon skin */
-export function makeSkin(base = '#6a2218', size = 256) {
-  const rnd = mulberry32(base.length * 977 + base.charCodeAt(1) * 31);
-  const col = canvas(size), hgt = canvas(size);
-  const c = col.getContext('2d'), h = hgt.getContext('2d');
-  c.fillStyle = base; c.fillRect(0, 0, size, size);
-  h.fillStyle = '#888'; h.fillRect(0, 0, size, size);
-  blobs(c, size, 60, 'rgba(0,0,0,A)', 10, 50, rnd);
-  blobs(c, size, 30, 'rgba(255,120,60,A)', 8, 30, rnd);
-  for (let i = 0; i < 60; i++) {
-    const x = rnd() * size, y = rnd() * size, r = 2 + rnd() * 6;
-    h.fillStyle = `rgba(${rnd() < 0.5 ? 255 : 0},${rnd() < 0.5 ? 255 : 0},${rnd() < 0.5 ? 255 : 0},0.35)`;
-    h.beginPath(); h.arc(x, y, r, 0, 7); h.fill();
-  }
-  noiseOverlay(c, size, 40, rnd);
-  noiseOverlay(h, size, 100, rnd);
-  return { map: toTexture(col), bump: toTexture(hgt, false) };
 }

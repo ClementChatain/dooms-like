@@ -1,6 +1,8 @@
 import * as THREE from 'three';
+import { toonGradient } from './textures.js';
 
-const metal = (c = 0x2b2e35) => new THREE.MeshStandardMaterial({ color: c, metalness: 0.9, roughness: 0.32 });
+const toon = (c) => new THREE.MeshToonMaterial({ color: c, gradientMap: toonGradient() });
+const metal = (c = 0x4a4f6a) => toon(c);
 const glow = (c, i = 3) => new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(i) });
 
 export const WEAPONS = [
@@ -10,7 +12,7 @@ export const WEAPONS = [
 
 function buildRifle() {
   const g = new THREE.Group();
-  const dark = metal(), light = metal(0x6a717c);
+  const dark = metal(), light = metal(0xa8b0d8);
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.1, 0.34), dark); body.position.set(0, 0, 0.02);
   const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.02, 0.3, 12), light); barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.012, -0.28);
   const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.16), dark); shroud.position.set(0, 0.005, -0.2);
@@ -26,8 +28,8 @@ function buildRifle() {
 
 function buildShotgun() {
   const g = new THREE.Group();
-  const dark = metal(0x23252a), light = metal(0x777d88);
-  const wood = new THREE.MeshStandardMaterial({ color: 0x4a2a16, roughness: 0.6, metalness: 0.1 });
+  const dark = metal(0x4a4060), light = metal(0xc0c4e0);
+  const wood = toon(0xb86a3a);
   for (const sx of [-1, 1]) {
     const b = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.52, 14), light);
     b.rotation.x = Math.PI / 2; b.position.set(sx * 0.024, 0.02, -0.28); g.add(b);

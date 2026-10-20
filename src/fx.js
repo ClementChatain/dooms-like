@@ -111,16 +111,16 @@ const GradeShader = {
       col.b = texture2D(tDiffuse, vUv - c * ab).b;
       // contrast / saturation
       float l = dot(col, vec3(0.299,0.587,0.114));
-      col = mix(vec3(l), col, 1.15);
+      col = mix(vec3(l), col, 1.3);
       // vignette
       float vig = smoothstep(0.85, 0.15, r2 * 1.6);
-      col *= mix(0.35, 1.0, vig);
+      col *= mix(0.62, 1.0, vig);
       // damage tint
       col = mix(col, col * vec3(1.6,0.25,0.2) + vec3(0.25,0.0,0.0) * r2 * 4.0, damage * smoothstep(0.0, 0.5, r2 + 0.1));
       col += vec3(0.5,0.35,0.2) * flash * 0.15;
       col += vec3(0.05,0.35,0.15) * heal * (0.3 + r2 * 2.0);
       // film grain
-      col += (hash(vUv * 1000.0 + fract(time)) - 0.5) * 0.014;
+      col += (hash(vUv * 1000.0 + fract(time)) - 0.5) * 0.006;
       gl_FragColor = vec4(col, 1.0);
     }`,
 };
@@ -129,7 +129,7 @@ export function createComposer(renderer, scene, camera, { mobile }) {
   const size = renderer.getSize(new THREE.Vector2());
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(size.clone().multiplyScalar(mobile ? 0.5 : 0.75), mobile ? 0.4 : 0.55, 0.5, 1.0);
+  const bloom = new UnrealBloomPass(size.clone().multiplyScalar(mobile ? 0.5 : 0.75), mobile ? 0.3 : 0.4, 0.5, 1.0);
   composer.addPass(bloom);
   const grade = new ShaderPass(GradeShader);
   composer.addPass(grade);
