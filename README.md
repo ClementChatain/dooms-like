@@ -7,7 +7,7 @@ FPS rétro façon DOOM avec des graphismes modernes (three.js : éclairage dynam
 - **PC** : `ZQSD` bouger · souris viser · clic tirer · `Shift` courir · `1`/`2`/molette armes · `M` son · `Échap` pause
 - **Mobile** (paysage) : stick à gauche pour bouger (pousser à fond = courir) · glisser à droite pour viser · bouton **TIR** · bouton **ARME**
 
-Niveaux générés procéduralement. Tuez tous les démons, puis rejoignez le portail vert.
+Niveaux générés procéduralement. Tuez tous les ennemis, puis rejoignez le portail vert.
 
 ## Développement
 

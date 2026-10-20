@@ -1,14 +1,8 @@
 import * as THREE from 'three';
+import { toonGradient } from './textures.js';
 
 export const CELL = 3;
 export const WALL_H = 3.6;
-
-export const THEMES = [
-  { name: 'Les Catacombes',        fog: 0x1c0a07, wall: [1.0, 0.85, 0.78], torch: 0xff7a2a, ambient: 0x3a1a12 },
-  { name: 'Le Laboratoire toxique', fog: 0x07180c, wall: [0.75, 1.0, 0.8],  torch: 0x7dff4a, ambient: 0x12301a },
-  { name: 'La Cathédrale de glace', fog: 0x08111f, wall: [0.75, 0.88, 1.0], torch: 0x58b8ff, ambient: 0x14263f },
-  { name: 'La Forge infernale',     fog: 0x240405, wall: [1.0, 0.7, 0.65],  torch: 0xff3a1a, ambient: 0x401410 },
-];
 
 function mulberry32(a) {
   return () => {
@@ -21,14 +15,15 @@ function mulberry32(a) {
 
 /** Pure grid data + collision / raycast helpers (no rendering). */
 export class LevelData {
-  constructor(level, seed = (Math.random() * 1e9) | 0) {
+  constructor(level, { arena = false, seed = (Math.random() * 1e9) | 0 } = {}) {
     this.level = level;
+    this.arena = arena;
     this.rand = mulberry32(seed);
-    const size = Math.min(23 + level * 4, 47) | 1;
+    const size = arena ? 25 : Math.min(23 + level * 3, 43) | 1;
     this.w = this.h = size;
     this.grid = new Uint8Array(size * size).fill(1);
     this.rooms = [];
-    this.generate();
+    if (arena) this.generateArena(); else this.generate();
     this.flow = new Int16Array(size * size);
     this.flowCell = -1;
   }
@@ -40,9 +35,22 @@ export class LevelData {
 
   carve(x, y) { if (x > 0 && y > 0 && x < this.w - 1 && y < this.h - 1) this.grid[this.idx(x, y)] = 0; }
 
+  /** Une grande salle ronde-carrée avec quatre piliers, pour le combat de boss. */
+  generateArena() {
+    const { w, h } = this, m = 3, rw = w - m * 2, rh = h - m * 2;
+    const room = { x: m, y: m, w: rw, h: rh, cx: w >> 1, cy: h >> 1 };
+    for (let j = room.y; j < room.y + rh; j++) for (let i = room.x; i < room.x + rw; i++) this.carve(i, j);
+    for (const [px, py] of [[8, 8], [16, 8], [8, 16], [16, 16]]) this.grid[this.idx(px, py)] = 1;
+    this.rooms = [room];
+    this.start = room;
+    this.spawn = { cx: w >> 1, cy: h - m - 2 };
+    this.bossSpawn = { cx: w >> 1, cy: m + 3 };
+    this.exitRoom = { cx: w >> 1, cy: m + 2 };
+  }
+
   generate() {
     const r = this.rand, { w, h } = this;
-    const target = Math.min(6 + this.level, 14);
+    const target = Math.min(6 + this.level, 12);
     for (let tries = 0; tries < 300 && this.rooms.length < target; tries++) {
       const rw = 3 + Math.floor(r() * 5), rh = 3 + Math.floor(r() * 5);
       const x = 1 + Math.floor(r() * (w - rw - 2)), y = 1 + Math.floor(r() * (h - rh - 2));
@@ -200,17 +208,14 @@ export class LevelView {
         wallCells.push([i, j]);
       }
     }
-    const wallMat = new THREE.MeshStandardMaterial({
-      map: tex.wall.map, bumpMap: tex.wall.bump, bumpScale: 3, roughness: 0.92, metalness: 0.05,
-      color: new THREE.Color(...theme.wall),
-    });
-    wallMat.map.repeat.set(1, 1);
+    const gradientMap = toonGradient();
+    const wallMat = new THREE.MeshToonMaterial({ map: tex.wall.map, gradientMap });
     const walls = new THREE.InstancedMesh(new THREE.BoxGeometry(CELL, WALL_H, CELL), wallMat, wallCells.length);
     const m = new THREE.Matrix4(), col = new THREE.Color();
     wallCells.forEach(([i, j], n) => {
       m.makeTranslation((i + 0.5) * CELL, WALL_H / 2, (j + 0.5) * CELL);
       walls.setMatrixAt(n, m);
-      const v = 0.8 + data.rand() * 0.35;
+      const v = 0.92 + data.rand() * 0.12;
       walls.setColorAt(n, col.setRGB(v, v, v));
     });
     walls.instanceMatrix.needsUpdate = true;
@@ -219,19 +224,15 @@ export class LevelView {
 
     // ---------- floor / ceiling
     const span = w * CELL;
-    const floorMat = new THREE.MeshStandardMaterial({
-      map: tex.floor.map.clone(), bumpMap: tex.floor.bump.clone(), bumpScale: 2.5, roughness: 0.55, metalness: 0.25,
-    });
-    for (const t of [floorMat.map, floorMat.bumpMap]) { t.repeat.set(w * 1.0, h * 1.0); t.needsUpdate = true; }
+    const floorMat = new THREE.MeshToonMaterial({ map: tex.floor.map.clone(), gradientMap });
+    floorMat.map.repeat.set(w * 0.5, h * 0.5); floorMat.map.needsUpdate = true;
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(span, span), floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.position.set(span / 2, 0, span / 2);
     this.group.add(floor);
 
-    const ceilMat = new THREE.MeshStandardMaterial({
-      map: tex.ceil.map.clone(), bumpMap: tex.ceil.bump.clone(), bumpScale: 2, roughness: 0.6, metalness: 0.6,
-    });
-    for (const t of [ceilMat.map, ceilMat.bumpMap]) { t.repeat.set(w * 0.75, h * 0.75); t.needsUpdate = true; }
+    const ceilMat = new THREE.MeshToonMaterial({ map: tex.ceil.map.clone(), gradientMap });
+    ceilMat.map.repeat.set(w * 0.5, h * 0.5); ceilMat.map.needsUpdate = true;
     const ceil = new THREE.Mesh(new THREE.PlaneGeometry(span, span), ceilMat);
     ceil.rotation.x = Math.PI / 2;
     ceil.position.set(span / 2, WALL_H, span / 2);
@@ -250,7 +251,7 @@ export class LevelView {
     }
     const flameGeo = new THREE.SphereGeometry(0.09, 10, 8);
     const flameMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(theme.torch).multiplyScalar(3.5) });
-    const bracketMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.9, roughness: 0.4 });
+    const bracketMat = new THREE.MeshToonMaterial({ color: 0x2a2036, gradientMap });
     const glowMat = new THREE.SpriteMaterial({
       map: glowTex, color: theme.torch, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.8,
     });
@@ -304,7 +305,7 @@ export class LevelView {
     beam.position.set(ex, WALL_H / 2, ez);
     const pad = new THREE.Mesh(
       new THREE.CylinderGeometry(1.1, 1.2, 0.08, 32),
-      new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xff2020, emissiveIntensity: 0.6, metalness: 0.8, roughness: 0.3 }),
+      new THREE.MeshToonMaterial({ color: 0x221830, emissive: 0xff2020, emissiveIntensity: 0.6, gradientMap }),
     );
     pad.position.set(ex, 0.04, ez);
     const exitGlow = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -313,10 +314,14 @@ export class LevelView {
     exitGlow.position.set(ex, 1.3, ez); exitGlow.scale.set(4, 4, 1);
     this.exit.parts = { ring, disc, beam, pad, exitGlow };
     this.group.add(ring, disc, beam, pad, exitGlow);
+    this.exit.visible = !data.arena;
+    for (const o of Object.values(this.exit.parts)) o.visible = this.exit.visible;
   }
 
   unlockExit() {
     this.exit.unlocked = true;
+    this.exit.visible = true;
+    for (const o of Object.values(this.exit.parts)) o.visible = true;
     const c = new THREE.Color(0x3dffb0);
     const p = this.exit.parts;
     p.ring.material.color.copy(c).multiplyScalar(3);
@@ -355,7 +360,7 @@ export class LevelView {
         const t = this.torches[u.torch];
         const f = 0.85 + 0.15 * Math.sin(time * 13 + t.phase) * Math.sin(time * 7.3 + t.phase * 2);
         l.position.set(t.x - 0.0, t.y, t.z);
-        l.intensity = 50 * u.k * f;
+        l.intensity = 20 * u.k * f;
       } else l.intensity = 0;
     }
     // exit animation
